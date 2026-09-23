@@ -29,6 +29,8 @@ class ChecklistItem(BaseModel):
 class AIAnalysisResult(BaseModel):
     item_id: str
     status: str = "REVIEW"
+    analysis_method: str = "DEMO"
+    error_message: str | None = None
     current_assessment: str = ""
     evidence: list[str] = Field(default_factory=list)
     issue_or_risk: str | None = None

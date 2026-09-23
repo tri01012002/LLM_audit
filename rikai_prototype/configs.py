@@ -23,6 +23,7 @@ class EnvConfig(BaseSettings):
 
     # ── chọn provider đang dùng ──
     api_provider: Literal["openai", "groq", "openrouter", "anthropic"] = "anthropic"
+    ai_mode: Literal["auto", "llm", "demo"] = "auto"
 
     model: str = ""
     embedding_model: str = ""

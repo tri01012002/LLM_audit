@@ -23,7 +23,9 @@ def _header_matches(row: list[Any]) -> bool:
 
 
 def parse_checklist_workbook(file_like: Any) -> list[ChecklistItem]:
-    if hasattr(file_like, "getvalue"):
+    if isinstance(file_like, bytes):
+        blob = file_like
+    elif hasattr(file_like, "getvalue"):
         blob = file_like.getvalue()
     else:
         blob = file_like.read()

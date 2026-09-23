@@ -3,13 +3,12 @@ from __future__ import annotations
 import os
 import uuid
 import hashlib
-from pathlib import Path
 
 import streamlit as st
 
 from core.ai_analyzer import analyze_checklist_items, export_reviewed_workbook
 from core.business_rules import evaluate_business_rules
-from core.checklist_models import ChecklistItem, ReviewDecision
+from core.checklist_models import ChecklistItem
 from core.excel_parser import parse_checklist_workbook
 
 st.set_page_config(page_title="AI Audit Assistant", page_icon="🛡️", layout="wide")
@@ -31,17 +30,27 @@ def _safe_session_state():
 
 
 def _summarize_counts(items):
-    counts = {"total": len(items), "answered": 0, "unanswered": 0, "needs_confirmation": 0, "possible_contradiction": 0}
+    counts = {"total": len(items), "answered": 0, "unanswered": 0, "circle": 0, "triangle": 0, "cross": 0, "na": 0, "needs_confirmation": 0, "possible_contradiction": 0, "needs_information": 0, "normal": 0, "ai_errors": 0}
     for item in items:
         if item.partner_answer:
             counts["answered"] += 1
         else:
             counts["unanswered"] += 1
+        answer_key = {"〇": "circle", "○": "circle", "△": "triangle", "✕": "cross", "×": "cross", "－": "na", "-": "na"}.get(item.partner_answer)
+        if answer_key:
+            counts[answer_key] += 1
         rule = evaluate_business_rules(item)
         if rule["status"] in {"NEEDS_CONFIRMATION", "NEEDS_INFORMATION", "NEEDS_REVIEW"}:
             counts["needs_confirmation"] += 1
         if rule["status"] == "POSSIBLE_CONTRADICTION":
             counts["possible_contradiction"] += 1
+        if rule["status"] == "NEEDS_INFORMATION":
+            counts["needs_information"] += 1
+        if rule["status"] == "NORMAL":
+            counts["normal"] += 1
+        result = st.session_state.analysis_results.get(item.item_id)
+        if result and result.status == "AI_ERROR":
+            counts["ai_errors"] += 1
     return counts
 
 
@@ -109,12 +118,14 @@ def _display_row(item: ChecklistItem):
 
 
 def _run_analysis(items):
-    st.session_state.analysis_results = analyze_checklist_items(items)
+    mode = st.session_state.get("analysis_mode", "auto")
+    st.session_state.analysis_results = analyze_checklist_items(items, mode=mode, force_llm=mode == "llm_all")
 
 
 def _page_upload():
     st.title("AI Audit Assistant")
     st.caption("Upload answered checklist Excel → analyze → review → export")
+    st.info("AI-generated first-pass analysis. Final decision remains with the auditor.")
 
     uploaded = st.file_uploader("Choose Excel file", type=["xlsx", "xlsm"], accept_multiple_files=False)
     if uploaded is not None:
@@ -142,8 +153,20 @@ def _page_upload():
             items = st.session_state.checklist_items
             counts = _summarize_counts(items)
             st.success(f"{len(items)} items parsed successfully.")
+            st.session_state.analysis_mode = st.radio(
+                "Analysis mode",
+                ["auto", "demo", "llm", "llm_all"],
+                format_func=lambda value: {
+                    "auto": "Auto: AI when configured, otherwise demo",
+                    "demo": "DEMO MODE — deterministic fallback",
+                    "llm": "REAL AI ANALYSIS — semantic cases",
+                    "llm_all": "REAL AI ANALYSIS — all items",
+                }[value],
+                horizontal=True,
+                key="analysis_mode_selector",
+            )
             st.write(f"Answered: {counts['answered']} | Unanswered: {counts['unanswered']} | Needs confirmation: {counts['needs_confirmation']} | Possible contradiction: {counts['possible_contradiction']}")
-            if st.button("Analyze checklist"):
+            if st.button("Analyze with AI"):
                 _run_analysis(items)
                 st.rerun()
 
@@ -155,6 +178,7 @@ def _page_upload():
         col2.metric("Answered", counts["answered"])
         col3.metric("Unanswered", counts["unanswered"])
         col4.metric("Needs review", counts["needs_confirmation"])
+        st.write(f"〇 {counts['circle']} | △ {counts['triangle']} | ✕ {counts['cross']} | － {counts['na']} | Possible contradiction: {counts['possible_contradiction']} | Needs information: {counts['needs_information']} | Normal: {counts['normal']} | AI errors: {counts['ai_errors']}")
 
         st.dataframe(
             [
@@ -182,6 +206,13 @@ def _page_upload():
                     continue
                 with st.expander(f"{item.item_id} — {item.question or item.detail}"):
                     st.write("**Status:**", result.status)
+                    st.write("**Analysis method:**", "REAL AI ANALYSIS" if result.analysis_method == "AI" else ("AI ERROR" if result.analysis_method == "AI_ERROR" else "DEMO MODE — deterministic fallback"))
+                    st.write("**Category:**", item.category or "-")
+                    st.write("**Detail:**", item.detail or "-")
+                    st.write("**Partner answer:**", item.partner_answer or "(未回答)")
+                    st.write("**Partner comment:**", item.partner_comment or "(未記載)")
+                    st.write("**Rule reason:**", evaluate_business_rules(item)["reason"] or "-")
+                    st.write("**Source:**", f"{item.source_sheet} / Row {item.source_row}")
                     st.write("**Assessment:**", result.current_assessment)
                     st.write("**Issue / Risk:**", result.issue_or_risk or "-")
                     st.write("**Evidence:**")
@@ -189,6 +220,12 @@ def _page_upload():
                         st.write(f"- {e}")
                     st.write("**Confirmation required:**", bool(result.confirmation_required))
                     st.write("**Proposal:**", result.improvement_proposal or "-")
+                    st.write("**Missing information:**", ", ".join(result.missing_information) or "-")
+                    st.write("**FACT:**", result.fact or "-")
+                    st.write("**INFERENCE:**", result.inference or "-")
+                    st.write("**RECOMMENDATION:**", result.recommendation or "-")
+                    if result.error_message:
+                        st.error(f"AI analysis failed for item {item.item_id}. Reason: {result.error_message}")
 
                     decision = st.session_state.review_decisions.get(item.item_id, {})
                     final_assessment = st.text_area("Final assessment", value=decision.get("final_assessment", result.current_assessment), key=f"final_assess_{item.item_id}")
@@ -203,6 +240,7 @@ def _page_upload():
                             "confirmation_required": str(result.confirmation_required),
                             "confirmation_reason": result.confirmation_reason or "",
                             "issue_or_risk": result.issue_or_risk,
+                            "classification": result.status,
                             "status": result.status,
                         }
                         st.success(f"Saved review for {item.item_id}")
@@ -220,6 +258,7 @@ def _page_upload():
                                 "confirmation_required": str(bool(st.session_state.analysis_results.get(item.item_id).confirmation_required)) if st.session_state.analysis_results.get(item.item_id) else "False",
                                 "confirmation_reason": (st.session_state.analysis_results.get(item.item_id).confirmation_reason if st.session_state.analysis_results.get(item.item_id) else ""),
                                 "issue_or_risk": (st.session_state.analysis_results.get(item.item_id).issue_or_risk if st.session_state.analysis_results.get(item.item_id) else ""),
+                                "classification": (st.session_state.analysis_results.get(item.item_id).status if st.session_state.analysis_results.get(item.item_id) else "REVIEW"),
                                 "status": (st.session_state.analysis_results.get(item.item_id).status if st.session_state.analysis_results.get(item.item_id) else "REVIEW"),
                             }
                     export_reviewed_workbook(st.session_state.uploaded_file_bytes, st.session_state.checklist_items, {k: v for k, v in st.session_state.review_decisions.items()}, output_path)

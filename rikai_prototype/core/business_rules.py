@@ -45,6 +45,10 @@ def evaluate_business_rules(item: Any) -> dict[str, Any]:
         status = "NEEDS_CONFIRMATION"
         reason = "回答理由が未記入のため、追加確認が必要です。"
         needs_confirmation = True
+    elif answer in {"✕", "×"}:
+        status = "NEEDS_REVIEW"
+        reason = "未実施の回答であるため、未実施の理由、影響範囲、改善計画の確認が必要です。"
+        needs_confirmation = True
     elif answer == "〇" and any(p in comment for p in CONTRADICTION_PATTERNS):
         status = "POSSIBLE_CONTRADICTION"
         reason = "〇の回答に対して、条件付きや一部対応の表現が含まれており、実装の範囲が不明確です。"
