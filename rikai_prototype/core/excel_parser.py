@@ -66,7 +66,7 @@ def parse_checklist_workbook(file_like: Any) -> list[ChecklistItem]:
             mapped["detail"] = idx
         if "チェック項目" in text:
             mapped["question"] = idx
-        if "回答" in text:
+        if "回答" in text and "是正依頼回答" not in text:
             mapped["answer"] = idx
         if "コメント" in text and "調達先コメント" in text:
             mapped["comment"] = idx
@@ -101,6 +101,8 @@ def parse_checklist_workbook(file_like: Any) -> list[ChecklistItem]:
         comment = _clean(row[mapped["comment"]] if mapped["comment"] < len(row) else "")
         no_value = _clean(row[mapped.get("no", 0)] if mapped.get("no", 0) < len(row) else "")
         corrective_response = _clean(row[mapped["corrective_response"]] if "corrective_response" in mapped and mapped["corrective_response"] < len(row) else "")
+        if not no_value and question and "-" in question:
+            no_value = question.split("-", 1)[0].strip()
 
         # openpyxl exposes merged follow-on cells as None; carry only the
         # descriptive fields forward, never partner answers/comments.
@@ -129,6 +131,7 @@ def parse_checklist_workbook(file_like: Any) -> list[ChecklistItem]:
             source_sheet=target_sheet.title,
             source_columns=[openpyxl.utils.get_column_letter(index + 1) for index in range(len(header_row)) if header_row[index] is not None],
             category=category,
+            group_id=no_value,
             question=question,
             detail=detail,
             partner_answer=answer,

@@ -10,6 +10,7 @@ from core.ai_analyzer import analyze_checklist_items, export_reviewed_workbook
 from core.business_rules import evaluate_business_rules
 from core.checklist_models import ChecklistItem
 from core.excel_parser import parse_checklist_workbook
+from core.ground_truth import aggregate_group_results, compare_ground_truth, load_ground_truth
 from core.llm import llm_configuration_status
 
 st.set_page_config(page_title="AI Audit Assistant", page_icon="🛡️", layout="wide")
@@ -28,6 +29,10 @@ def _safe_session_state():
         st.session_state.uploaded_file_bytes = None
     if "uploaded_file_hash" not in st.session_state:
         st.session_state.uploaded_file_hash = ""
+    if "ground_truth_items" not in st.session_state:
+        st.session_state.ground_truth_items = {}
+    if "ground_truth_groups" not in st.session_state:
+        st.session_state.ground_truth_groups = {}
 
 
 def _summarize_counts(items):
@@ -37,7 +42,7 @@ def _summarize_counts(items):
             counts["answered"] += 1
         else:
             counts["unanswered"] += 1
-        answer_key = {"〇": "circle", "○": "circle", "△": "triangle", "✕": "cross", "×": "cross", "－": "na", "-": "na"}.get(item.partner_answer)
+        answer_key = {"〇": "circle", "○": "circle", "△": "triangle", "✕": "cross", "✖": "cross", "×": "cross", "－": "na", "-": "na"}.get(item.partner_answer)
         if answer_key:
             counts[answer_key] += 1
         rule = evaluate_business_rules(item)
@@ -146,6 +151,12 @@ def _page_upload():
                 st.session_state.uploaded_file_name = uploaded.name
                 st.session_state.uploaded_file_bytes = uploaded_bytes
                 st.session_state.checklist_items = items
+                try:
+                    ground_truth_items, ground_truth_groups, _ = load_ground_truth(uploaded_bytes)
+                except ValueError:
+                    ground_truth_items, ground_truth_groups = {}, {}
+                st.session_state.ground_truth_items = ground_truth_items
+                st.session_state.ground_truth_groups = ground_truth_groups
                 st.session_state.analysis_results = {}
                 st.session_state.review_decisions = {}
                 st.session_state.uploaded_file_hash = uploaded_hash
@@ -162,6 +173,8 @@ def _page_upload():
             items = st.session_state.checklist_items
             counts = _summarize_counts(items)
             st.success(f"{len(items)} items parsed successfully.")
+            comments = sum(bool(item.partner_comment) for item in items)
+            st.write(f"Partner responses: {sum(bool(item.partner_answer) for item in items)} / {len(items)} | Comments: {comments} | Items ready for analysis: {sum(bool(item.partner_answer) for item in items)} / {len(items)}")
             st.session_state.analysis_mode = st.radio(
                 "Analysis mode",
                 ["auto", "demo", "llm", "llm_all"],
@@ -187,7 +200,7 @@ def _page_upload():
         col2.metric("Answered", counts["answered"])
         col3.metric("Unanswered", counts["unanswered"])
         col4.metric("Needs review", counts["needs_confirmation"])
-        st.write(f"〇 {counts['circle']} | △ {counts['triangle']} | ✕ {counts['cross']} | － {counts['na']} | Normal: {counts['normal']} | Needs information: {counts['needs_information']} | Needs confirmation: {counts['needs_confirmation']} | Possible contradiction: {counts['possible_contradiction']} | Needs review: {counts['needs_review']} | AI errors: {counts['ai_errors']}")
+        st.write(f"〇 {counts['circle']} | △ {counts['triangle']} | ✖ {counts['cross']} | － {counts['na']} | Normal: {counts['normal']} | Needs information: {counts['needs_information']} | Needs confirmation: {counts['needs_confirmation']} | Possible contradiction: {counts['possible_contradiction']} | Needs review: {counts['needs_review']} | AI errors: {counts['ai_errors']}")
 
         st.dataframe(
             [
@@ -210,6 +223,14 @@ def _page_upload():
 
         if st.session_state.analysis_results:
             st.subheader("AI review results")
+            groups = aggregate_group_results(st.session_state.checklist_items, st.session_state.analysis_results)
+            st.subheader("26-group summary")
+            st.dataframe(groups, use_container_width=True)
+            if st.session_state.ground_truth_items and st.button("Run ground-truth evaluation"):
+                metrics = compare_ground_truth(st.session_state.checklist_items, st.session_state.analysis_results, st.session_state.ground_truth_items, st.session_state.ground_truth_groups)
+                st.write(f"Item confirmation matched: {metrics['items']['confirmation_matched']} / {metrics['items']['total']}")
+                st.write(f"Item corrective-action matched: {metrics['items']['corrective_action_matched']} / {metrics['items']['total']}")
+                st.write(f"Group classification matched: {metrics['groups']['classification_matched']} / {metrics['groups']['total']}")
             result_filter = st.selectbox(
                 "Filter results",
                 ["ALL", "NORMAL", "NEEDS_INFORMATION", "NEEDS_CONFIRMATION", "POSSIBLE_CONTRADICTION", "SUPPORTED_NA", "NEEDS_REVIEW", "AI_ERROR"],
@@ -282,7 +303,8 @@ def _page_upload():
                                 "classification": (st.session_state.analysis_results.get(item.item_id).status if st.session_state.analysis_results.get(item.item_id) else "REVIEW"),
                                 "status": (st.session_state.analysis_results.get(item.item_id).status if st.session_state.analysis_results.get(item.item_id) else "REVIEW"),
                             }
-                    export_reviewed_workbook(st.session_state.uploaded_file_bytes, st.session_state.checklist_items, {k: v for k, v in st.session_state.review_decisions.items()}, output_path)
+                    group_decisions = {group["group_id"]: group for group in groups}
+                    export_reviewed_workbook(st.session_state.uploaded_file_bytes, st.session_state.checklist_items, {k: v for k, v in st.session_state.review_decisions.items()}, output_path, group_decisions=group_decisions)
                     with open(output_path, "rb") as f:
                         st.download_button("Download reviewed Excel", f.read(), file_name=os.path.basename(output_path), mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                     st.success(f"Reviewed workbook exported to: {output_path}")

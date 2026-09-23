@@ -229,7 +229,7 @@ def _write_cell_handling_merges(sheet, row: int, column: int, value: Any) -> Non
     cell.value = value
 
 
-def export_reviewed_workbook(original_bytes: bytes, items: list[ChecklistItem], decisions: dict[str, dict[str, Any]], output_path: str) -> str:
+def export_reviewed_workbook(original_bytes: bytes, items: list[ChecklistItem], decisions: dict[str, dict[str, Any]], output_path: str, group_decisions: dict[str, dict[str, Any]] | None = None) -> str:
     workbook = load_workbook(io.BytesIO(original_bytes), data_only=False)
     sheet, _, headers = _find_checklist_sheet_and_headers(workbook)
     # Auditor columns may be merged by main-question groups in the template.
@@ -265,9 +265,21 @@ def export_reviewed_workbook(original_bytes: bytes, items: list[ChecklistItem], 
         }
         for key, value in values.items():
             column = columns.get(key)
-            if column is not None:
+            if column is not None and not (group_decisions and key in {"classification", "auditor_comment"}):
                 _write_cell_handling_merges(sheet, row_no, column, value)
         # Column K (partner corrective-action response) is intentionally preserved.
+
+    if group_decisions:
+        group_rows: dict[str, int] = {}
+        for item in items:
+            group_id = item.group_id or item.item_id.split("-", 1)[0]
+            group_rows[group_id] = min(group_rows.get(group_id, item.source_row), item.source_row)
+        for group_id, group in group_decisions.items():
+            row_no = group_rows.get(str(group_id))
+            if row_no is None:
+                continue
+            _write_cell_handling_merges(sheet, row_no, columns["classification"], group.get("classification", ""))
+            _write_cell_handling_merges(sheet, row_no, columns["auditor_comment"], group.get("summary", ""))
 
     workbook.save(output_path)
     return output_path

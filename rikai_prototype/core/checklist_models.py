@@ -11,6 +11,7 @@ class ChecklistItem(BaseModel):
     source_sheet: str = Field(description="Original worksheet name")
     source_columns: list[str] = Field(default_factory=list)
     category: str = ""
+    group_id: str = ""
     question: str = ""
     detail: str = ""
     partner_answer: str = ""
@@ -24,6 +25,30 @@ class ChecklistItem(BaseModel):
     result_classification: str | None = None
     auditor_comment: str | None = None
     source_raw: dict[str, str] = Field(default_factory=dict)
+
+
+class GroundTruthItem(BaseModel):
+    source_row: int
+    group_id: str
+    item_id: str
+    answer: str = ""
+    comment: str = ""
+    confirmation: str = ""
+    confirmation_request: str = ""
+    corrective_action: str = ""
+    corrective_action_proposal: str = ""
+    rationale: str = ""
+    source: list[str] = Field(default_factory=list)
+    cross_item_consistency: str = ""
+
+
+class GroundTruthGroup(BaseModel):
+    group_id: str
+    category: str = ""
+    classification: str = ""
+    corrective_action_count: int = 0
+    confirmation_count: int = 0
+    summary: str = ""
 
 
 class AIAnalysisResult(BaseModel):
