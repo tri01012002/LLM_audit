@@ -31,5 +31,5 @@ env/
 .DS_Store
 Thumbs.db
 
-.xlsx
-.pdf
+*.xlsx
+*.pdf
