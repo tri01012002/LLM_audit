@@ -25,6 +25,45 @@ from configs import env_config
 logger = logging.getLogger(__name__)
 
 
+PROVIDER_KEY_NAMES = {
+    "openai": "OPENAI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+}
+
+
+def llm_configuration_status() -> dict[str, str | bool]:
+    """Return safe provider readiness information without exposing credentials."""
+    provider = env_config.api_provider
+    key_name = PROVIDER_KEY_NAMES.get(provider, "unknown")
+    key_value = getattr(env_config, f"{provider}_api_key", None)
+    model = (env_config.model or "").strip()
+    if not key_value:
+        return {
+            "ready": False,
+            "provider": provider,
+            "model": model or "(not configured)",
+            "key_name": key_name,
+            "reason": f"{key_name} is not configured.",
+        }
+    if llm_client is None:
+        return {
+            "ready": False,
+            "provider": provider,
+            "model": model or "(not configured)",
+            "key_name": key_name,
+            "reason": "Provider client could not be initialized. Check the installed provider package and model.",
+        }
+    return {
+        "ready": True,
+        "provider": provider,
+        "model": model or "(not configured)",
+        "key_name": key_name,
+        "reason": "Provider client initialized; authentication is verified only by a live call.",
+    }
+
+
 
 
 

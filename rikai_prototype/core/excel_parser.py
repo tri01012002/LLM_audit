@@ -11,7 +11,7 @@ from core.checklist_models import ChecklistItem
 def _clean(value: Any) -> str:
     if value is None:
         return ""
-    return str(value).strip()
+    return " ".join(str(value).strip().split())
 
 
 def _header_matches(row: list[Any]) -> bool:
@@ -72,26 +72,46 @@ def parse_checklist_workbook(file_like: Any) -> list[ChecklistItem]:
             mapped["comment"] = idx
         if "調達先コメント" in text:
             mapped["comment"] = idx
-        if "No" in text:
+        if "是正依頼回答" in text:
+            mapped["corrective_response"] = idx
+        if text.lower() == "no":
             mapped["no"] = idx
 
     if "question" not in mapped:
         raise ValueError("チェック項目列が見つかりませんでした。")
 
+    required_columns = {"category", "detail", "question", "answer", "comment"}
+    missing_columns = required_columns - mapped.keys()
+    if missing_columns:
+        raise ValueError(f"必須列が見つかりません: {', '.join(sorted(missing_columns))}")
+
     items: list[ChecklistItem] = []
     item_id_counts: dict[str, int] = {}
+    previous_values: dict[str, str] = {}
     for r_index, row in enumerate(rows[header_index + 1:], start=header_index + 2):
         if row is None:
             continue
         if all(_clean(v) == "" for v in row):
             continue
 
-        category = _clean(row[mapped.get("category", 1)] if mapped.get("category", 1) < len(row) else "")
+        category = _clean(row[mapped["category"]] if mapped["category"] < len(row) else "")
         question = _clean(row[mapped["question"]] if mapped["question"] < len(row) else "")
-        detail = _clean(row[mapped.get("detail", 2)] if mapped.get("detail", 2) < len(row) else "")
-        answer = _clean(row[mapped.get("answer", 4)] if mapped.get("answer", 4) < len(row) else "")
-        comment = _clean(row[mapped.get("comment", 5)] if mapped.get("comment", 5) < len(row) else "")
+        detail = _clean(row[mapped["detail"]] if mapped["detail"] < len(row) else "")
+        answer = _clean(row[mapped["answer"]] if mapped["answer"] < len(row) else "")
+        comment = _clean(row[mapped["comment"]] if mapped["comment"] < len(row) else "")
         no_value = _clean(row[mapped.get("no", 0)] if mapped.get("no", 0) < len(row) else "")
+        corrective_response = _clean(row[mapped["corrective_response"]] if "corrective_response" in mapped and mapped["corrective_response"] < len(row) else "")
+
+        # openpyxl exposes merged follow-on cells as None; carry only the
+        # descriptive fields forward, never partner answers/comments.
+        for key, value in (("category", category), ("detail", detail)):
+            if value:
+                previous_values[key] = value
+            elif key in previous_values:
+                if key == "category":
+                    category = previous_values[key]
+                else:
+                    detail = previous_values[key]
 
         if not question and not detail and not answer and not comment:
             continue
@@ -107,12 +127,13 @@ def parse_checklist_workbook(file_like: Any) -> list[ChecklistItem]:
             item_id=item_id,
             source_row=r_index,
             source_sheet=target_sheet.title,
-            source_columns=["E", "F", "G", "H", "I", "J", "K", "L", "M"],
+            source_columns=[openpyxl.utils.get_column_letter(index + 1) for index in range(len(header_row)) if header_row[index] is not None],
             category=category,
             question=question,
             detail=detail,
             partner_answer=answer,
             partner_comment=comment,
+            corrective_action_response=corrective_response,
             confirmation_required=False,
             confirmation_reason=None,
             result_classification=None,

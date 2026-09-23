@@ -63,5 +63,3 @@ MAX_UPLOAD_MB = 20
 
 # from src.app_logging import setup_logging
 # setup_logging()
-print("model",env_config.model)
-# print(env_config.openrouter_api_key)

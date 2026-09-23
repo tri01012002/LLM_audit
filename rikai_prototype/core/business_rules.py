@@ -2,20 +2,21 @@ from __future__ import annotations
 
 from typing import Any
 
-AMBIGUOUS_PATTERNS = [
-    "原則", "一部", "検討中", "順次対応", "予定", "必要に応じて",
-    "適切に管理", "基本的に", "原則として", "場合による", "随時",
-    "要検討", "可能な範囲", "一部対応",
+VAGUE_PATTERNS = [
+    "原則", "一部", "検討中", "順次対応", "必要に応じて", "適切に管理",
+    "基本的に", "場合による", "随時", "要検討", "可能な範囲", "問題ありません",
+    "問題なし", "yes", "done", "implemented", "対応済み",
 ]
-PARTIAL_PATTERNS = [
-    "一部", "一部実施", "一部対応", "限定的", "一部のみ", "一部で",
-    "一部のみ実施", "一部を除き", "一部対象", "一部です",
-    "一部は", "一部は対応", "条件付き", "一部対応のみ",
+EXPLICIT_INCOMPLETENESS_PATTERNS = [
+    "未実施", "実施していない", "まだ実施", "未導入", "導入していない",
+    "未完了", "完了していない", "部分的", "一部のみ", "一部対応",
+    "限定的", "条件付き", "例外", "対象外", "対応予定", "実施予定",
+    "今後対応", "将来対応", "planned", "not implemented", "not yet implemented",
+    "partially implemented", "partial", "exception", "under review",
 ]
-CONTRADICTION_PATTERNS = [
-    "部分的", "予定", "順次", "検討中", "条件付き", "一部のみ",
-    "例外", "legacy", "従来", "既存", "対象外", "限定的", "将来",
-    "対応予定", "今後対応", "適用外", "一部対応",
+BENIGN_REVIEW_PATTERNS = [
+    "定期的にレビュー", "年次レビュー", "レビューを実施", "review is performed",
+    "review is conducted", "定期的にチェック", "チェックを実施",
 ]
 
 
@@ -31,6 +32,9 @@ def evaluate_business_rules(item: Any) -> dict[str, Any]:
     comment = normalize_text(getattr(item, "partner_comment", ""))
     combined = f"{answer} {comment}".strip()
     lower = combined.lower()
+    explicit_incompleteness = any(pattern.lower() in lower for pattern in EXPLICIT_INCOMPLETENESS_PATTERNS)
+    benign_review = any(pattern.lower() in lower for pattern in BENIGN_REVIEW_PATTERNS)
+    vague_language = any(pattern.lower() in lower for pattern in VAGUE_PATTERNS)
 
     status = "NORMAL"
     reason = ""
@@ -49,7 +53,7 @@ def evaluate_business_rules(item: Any) -> dict[str, Any]:
         status = "NEEDS_REVIEW"
         reason = "未実施の回答であるため、未実施の理由、影響範囲、改善計画の確認が必要です。"
         needs_confirmation = True
-    elif answer == "〇" and any(p in comment for p in CONTRADICTION_PATTERNS):
+    elif answer == "〇" and explicit_incompleteness and not benign_review:
         status = "POSSIBLE_CONTRADICTION"
         reason = "〇の回答に対して、条件付きや一部対応の表現が含まれており、実装の範囲が不明確です。"
         possible_contradiction = True
@@ -63,15 +67,14 @@ def evaluate_business_rules(item: Any) -> dict[str, Any]:
             reason = "対象外の説明が不足しているため、追加確認が必要です。"
             needs_confirmation = True
 
-    if status == "NORMAL" and any(p in comment for p in AMBIGUOUS_PATTERNS):
+    if status == "NORMAL" and vague_language and not benign_review:
         status = "NEEDS_REVIEW"
         reason = "曖昧な表現が含まれており、実装の実態を確認する必要があります。"
         needs_confirmation = True
 
-    if status == "NORMAL" and any(p in comment for p in PARTIAL_PATTERNS):
-        status = "POSSIBLE_CONTRADICTION"
-        reason = "コメントに部分対応の記載があり、実装範囲が不完全かどうかを確認する必要があります。"
-        possible_contradiction = True
+    if status == "NORMAL" and answer == "△":
+        status = "NEEDS_CONFIRMATION"
+        reason = "△の回答であるため、実装範囲、未完了部分、根拠資料の確認が必要です。"
         needs_confirmation = True
 
     return {
@@ -79,7 +82,8 @@ def evaluate_business_rules(item: Any) -> dict[str, Any]:
         "reason": reason,
         "needs_confirmation": needs_confirmation,
         "possible_contradiction": possible_contradiction,
-        "has_ambiguous_language": any(p in comment for p in AMBIGUOUS_PATTERNS),
+        "has_ambiguous_language": vague_language,
+        "has_explicit_incompleteness": explicit_incompleteness,
         "answer": answer,
         "comment": comment,
     }

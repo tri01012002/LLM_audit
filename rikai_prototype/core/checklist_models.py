@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,12 +15,12 @@ class ChecklistItem(BaseModel):
     detail: str = ""
     partner_answer: str = ""
     partner_comment: str = ""
+    corrective_action_response: str = ""
     confirmation_required: bool | None = None
     confirmation_reason: str | None = None
     interview_document_request: str | None = None
     corrective_action_required: bool | None = None
     corrective_action_request: str | None = None
-    corrective_action_response: str | None = None
     result_classification: str | None = None
     auditor_comment: str | None = None
     source_raw: dict[str, str] = Field(default_factory=dict)
@@ -28,7 +28,10 @@ class ChecklistItem(BaseModel):
 
 class AIAnalysisResult(BaseModel):
     item_id: str
-    status: str = "REVIEW"
+    status: Literal[
+        "NORMAL", "NEEDS_INFORMATION", "NEEDS_CONFIRMATION",
+        "POSSIBLE_CONTRADICTION", "SUPPORTED_NA", "NEEDS_REVIEW", "AI_ERROR",
+    ] = "NEEDS_REVIEW"
     analysis_method: str = "DEMO"
     error_message: str | None = None
     current_assessment: str = ""
@@ -38,7 +41,7 @@ class AIAnalysisResult(BaseModel):
     confirmation_reason: str | None = None
     improvement_proposal: str | None = None
     missing_information: list[str] = Field(default_factory=list)
-    confidence: str = "MEDIUM"
+    confidence: Literal["HIGH", "MEDIUM", "LOW"] = "MEDIUM"
     fact: str = ""
     inference: str = ""
     recommendation: str = ""

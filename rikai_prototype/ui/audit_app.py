@@ -10,6 +10,7 @@ from core.ai_analyzer import analyze_checklist_items, export_reviewed_workbook
 from core.business_rules import evaluate_business_rules
 from core.checklist_models import ChecklistItem
 from core.excel_parser import parse_checklist_workbook
+from core.llm import llm_configuration_status
 
 st.set_page_config(page_title="AI Audit Assistant", page_icon="🛡️", layout="wide")
 
@@ -30,7 +31,7 @@ def _safe_session_state():
 
 
 def _summarize_counts(items):
-    counts = {"total": len(items), "answered": 0, "unanswered": 0, "circle": 0, "triangle": 0, "cross": 0, "na": 0, "needs_confirmation": 0, "possible_contradiction": 0, "needs_information": 0, "normal": 0, "ai_errors": 0}
+    counts = {"total": len(items), "answered": 0, "unanswered": 0, "circle": 0, "triangle": 0, "cross": 0, "na": 0, "needs_confirmation": 0, "possible_contradiction": 0, "needs_information": 0, "normal": 0, "needs_review": 0, "ai_errors": 0}
     for item in items:
         if item.partner_answer:
             counts["answered"] += 1
@@ -40,15 +41,18 @@ def _summarize_counts(items):
         if answer_key:
             counts[answer_key] += 1
         rule = evaluate_business_rules(item)
-        if rule["status"] in {"NEEDS_CONFIRMATION", "NEEDS_INFORMATION", "NEEDS_REVIEW"}:
-            counts["needs_confirmation"] += 1
-        if rule["status"] == "POSSIBLE_CONTRADICTION":
-            counts["possible_contradiction"] += 1
-        if rule["status"] == "NEEDS_INFORMATION":
-            counts["needs_information"] += 1
-        if rule["status"] == "NORMAL":
-            counts["normal"] += 1
         result = st.session_state.analysis_results.get(item.item_id)
+        classification = result.status if result else rule["status"]
+        if classification in {"NEEDS_CONFIRMATION", "NEEDS_INFORMATION", "NEEDS_REVIEW", "POSSIBLE_CONTRADICTION"}:
+            counts["needs_confirmation"] += 1
+        if classification == "POSSIBLE_CONTRADICTION":
+            counts["possible_contradiction"] += 1
+        if classification == "NEEDS_INFORMATION":
+            counts["needs_information"] += 1
+        if classification == "NORMAL":
+            counts["normal"] += 1
+        if classification == "NEEDS_REVIEW":
+            counts["needs_review"] += 1
         if result and result.status == "AI_ERROR":
             counts["ai_errors"] += 1
     return counts
@@ -126,6 +130,11 @@ def _page_upload():
     st.title("AI Audit Assistant")
     st.caption("Upload answered checklist Excel → analyze → review → export")
     st.info("AI-generated first-pass analysis. Final decision remains with the auditor.")
+    llm_status = llm_configuration_status()
+    if llm_status["ready"]:
+        st.success(f"Live provider ready: {llm_status['provider']} / {llm_status['model']}")
+    else:
+        st.warning(f"Live LLM is not configured. Configure {llm_status['key_name']} for {llm_status['provider']} ({llm_status['reason']}) Demo mode remains available.")
 
     uploaded = st.file_uploader("Choose Excel file", type=["xlsx", "xlsm"], accept_multiple_files=False)
     if uploaded is not None:
@@ -178,7 +187,7 @@ def _page_upload():
         col2.metric("Answered", counts["answered"])
         col3.metric("Unanswered", counts["unanswered"])
         col4.metric("Needs review", counts["needs_confirmation"])
-        st.write(f"〇 {counts['circle']} | △ {counts['triangle']} | ✕ {counts['cross']} | － {counts['na']} | Possible contradiction: {counts['possible_contradiction']} | Needs information: {counts['needs_information']} | Normal: {counts['normal']} | AI errors: {counts['ai_errors']}")
+        st.write(f"〇 {counts['circle']} | △ {counts['triangle']} | ✕ {counts['cross']} | － {counts['na']} | Normal: {counts['normal']} | Needs information: {counts['needs_information']} | Needs confirmation: {counts['needs_confirmation']} | Possible contradiction: {counts['possible_contradiction']} | Needs review: {counts['needs_review']} | AI errors: {counts['ai_errors']}")
 
         st.dataframe(
             [
@@ -195,14 +204,20 @@ def _page_upload():
         )
 
         if st.button("Run analysis again"):
+            st.info("Saved auditor review decisions are retained; only analysis results are refreshed.")
             _run_analysis(st.session_state.checklist_items)
             st.rerun()
 
         if st.session_state.analysis_results:
             st.subheader("AI review results")
+            result_filter = st.selectbox(
+                "Filter results",
+                ["ALL", "NORMAL", "NEEDS_INFORMATION", "NEEDS_CONFIRMATION", "POSSIBLE_CONTRADICTION", "SUPPORTED_NA", "NEEDS_REVIEW", "AI_ERROR"],
+                key="result_filter",
+            )
             for item in st.session_state.checklist_items:
                 result = st.session_state.analysis_results.get(item.item_id)
-                if not result:
+                if not result or (result_filter != "ALL" and result.status != result_filter):
                     continue
                 with st.expander(f"{item.item_id} — {item.question or item.detail}"):
                     st.write("**Status:**", result.status)
@@ -228,8 +243,10 @@ def _page_upload():
                         st.error(f"AI analysis failed for item {item.item_id}. Reason: {result.error_message}")
 
                     decision = st.session_state.review_decisions.get(item.item_id, {})
+                    final_confirmation_request = st.text_area("Final confirmation / document request", value=decision.get("final_confirmation_request", result.confirmation_reason or ""), key=f"final_request_{item.item_id}")
                     final_assessment = st.text_area("Final assessment", value=decision.get("final_assessment", result.current_assessment), key=f"final_assess_{item.item_id}")
                     final_proposal = st.text_area("Final proposal", value=decision.get("final_proposal", result.improvement_proposal or ""), key=f"final_prop_{item.item_id}")
+                    final_comment = st.text_area("Final auditor comment", value=decision.get("final_comment", result.current_assessment), key=f"final_comment_{item.item_id}")
                     review_status = st.selectbox("Status", ["ACCEPTED", "EDITED", "REJECTED", "ON_HOLD"], index=["ACCEPTED", "EDITED", "REJECTED", "ON_HOLD"].index(decision.get("review_status", "ACCEPTED")), key=f"rev_status_{item.item_id}")
                     if st.button("Save item review", key=f"item_review_{item.item_id}"):
                         st.session_state.review_decisions[item.item_id] = {
@@ -239,7 +256,9 @@ def _page_upload():
                             "reviewer": "Auditor",
                             "confirmation_required": str(result.confirmation_required),
                             "confirmation_reason": result.confirmation_reason or "",
+                            "final_confirmation_request": final_confirmation_request,
                             "issue_or_risk": result.issue_or_risk,
+                            "final_comment": final_comment,
                             "classification": result.status,
                             "status": result.status,
                         }
@@ -257,7 +276,9 @@ def _page_upload():
                                 "reviewer": "Auditor",
                                 "confirmation_required": str(bool(st.session_state.analysis_results.get(item.item_id).confirmation_required)) if st.session_state.analysis_results.get(item.item_id) else "False",
                                 "confirmation_reason": (st.session_state.analysis_results.get(item.item_id).confirmation_reason if st.session_state.analysis_results.get(item.item_id) else ""),
+                                "final_confirmation_request": (st.session_state.analysis_results.get(item.item_id).confirmation_reason if st.session_state.analysis_results.get(item.item_id) else ""),
                                 "issue_or_risk": (st.session_state.analysis_results.get(item.item_id).issue_or_risk if st.session_state.analysis_results.get(item.item_id) else ""),
+                                "final_comment": (st.session_state.analysis_results.get(item.item_id).current_assessment if st.session_state.analysis_results.get(item.item_id) else ""),
                                 "classification": (st.session_state.analysis_results.get(item.item_id).status if st.session_state.analysis_results.get(item.item_id) else "REVIEW"),
                                 "status": (st.session_state.analysis_results.get(item.item_id).status if st.session_state.analysis_results.get(item.item_id) else "REVIEW"),
                             }
